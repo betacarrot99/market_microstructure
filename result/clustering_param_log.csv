@@ -1,0 +1,2 @@
+timestamp,n_clusters,lookback_window,features,accuracy,processing_time,input_date,input_end_date,method
+2025-05-30 18:46:50,3,25,"['returns', 'price_percentile', 'distance_from_ma', 'volatility']",0.7835045397729796,1405.48,2025-05-20,2025-05-20,Clustering_Optimized
