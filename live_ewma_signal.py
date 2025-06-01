@@ -34,8 +34,9 @@ while True:
             # if current_signal != prev_signal:
             logging.info(f"New Signal: {'UP' if current_signal == 1 else 'DOWN'}")
             prev_signal = current_signal
-        
+
     except Exception as e:
         logging.warning(f"Error reading or processing file: {e}")
-    
+
     time.sleep(CHECK_INTERVAL)
+
