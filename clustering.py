@@ -6,51 +6,19 @@ import os
 import time
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-# from sklearn.metrics import silhouette_score # Not used
 import warnings
+import joblib
+import json
+
+# Import from the new module
+from trading_indicators import TradingIndicators 
+
 warnings.filterwarnings('ignore')
 
 start_time = time.time()
 
-def create_technical_features(data, lookback_window=20):
-    """Create technical indicators for clustering"""
-    df = data.copy()
-    
-    df['returns'] = df['last_trade_price'].pct_change()
-    
-    # Optimized: Compute rolling object for price once
-    rolling_price = df['last_trade_price'].rolling(window=lookback_window)
-    
-    df['price_ma'] = rolling_price.mean()
-    df['price_std'] = rolling_price.std()
-    
-    df['rsi'] = calculate_rsi(df['last_trade_price'], lookback_window)
-    df['momentum'] = df['last_trade_price'] / df['last_trade_price'].shift(lookback_window) - 1
-    
-    df['volatility'] = df['returns'].rolling(window=lookback_window).std()
-    
-    # Optimized: Use pre-computed rolling_price
-    df['price_range'] = (rolling_price.max() - rolling_price.min()) / df['last_trade_price']
-    
-    df['price_percentile'] = rolling_price.rank(pct=True)
-    df['distance_from_ma'] = (df['last_trade_price'] - df['price_ma']) / df['price_ma']
-    
-    # Replace inf values that can occur from division by zero (e.g. price_ma is 0)
-    # df = df.replace([np.inf, -np.inf], np.nan) # Handled by dropna later, but can be explicit
-    
-    return df
-
-def calculate_rsi(prices, window=14):
-    """Calculate Relative Strength Index"""
-    delta = prices.diff()
-    # gain = (delta.where(delta > 0, 0)).rolling(window=window).mean() # Original
-    # loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean() # Original
-    gain = delta.clip(lower=0).rolling(window=window).mean()
-    loss = (-delta).clip(lower=0).rolling(window=window).mean()
-    
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+# Functions create_technical_features, calculate_rsi, generate_cluster_signals
+# are now part of TradingIndicators class and will be called using TradingIndicators.method_name()
 
 def clustering_strategy_with_tuning(data_input, cluster_range, lookback_range, feature_combinations):
     """
@@ -70,10 +38,9 @@ def clustering_strategy_with_tuning(data_input, cluster_range, lookback_range, f
     
     print(f"Testing {len(lookback_range)} lookback windows × {len(cluster_range)} cluster counts × {len(feature_combinations)} feature sets = {total_combinations} combinations...")
     
-    # Optimized loop order:
     for lookback_window in lookback_range:
-        # Create technical features ONCE for this lookback_window
-        df_with_features = create_technical_features(data_input, lookback_window)
+        # Use TradingIndicators for feature creation
+        df_with_features = TradingIndicators.create_technical_features(data_input, lookback_window)
         
         for n_clusters in cluster_range:
             for features_set in feature_combinations:
@@ -88,7 +55,8 @@ def clustering_strategy_with_tuning(data_input, cluster_range, lookback_range, f
                 
                 feature_data_unscaled = df_with_features[feature_cols].dropna()
                 
-                if len(feature_data_unscaled) < n_clusters * 10:
+                # Ensure enough data points for clustering after NaNs from features are dropped
+                if len(feature_data_unscaled) < n_clusters * 10: # Min 10 points per cluster
                     continue
                 
                 scaler = StandardScaler()
@@ -101,7 +69,8 @@ def clustering_strategy_with_tuning(data_input, cluster_range, lookback_range, f
                     df_clustered_iter = df_with_features.loc[feature_data_unscaled.index].copy()
                     df_clustered_iter['cluster'] = clusters
                     
-                    df_clustered_iter = generate_cluster_signals(df_clustered_iter, n_clusters)
+                    # Use TradingIndicators for signal generation
+                    df_clustered_iter = TradingIndicators.generate_cluster_signals(df_clustered_iter, n_clusters)
                     
                     df_clustered_iter['Market_Direction'] = np.where(
                         df_clustered_iter['last_trade_price'].shift(-1) > df_clustered_iter['last_trade_price'], 1, 0
@@ -123,49 +92,10 @@ def clustering_strategy_with_tuning(data_input, cluster_range, lookback_range, f
                         best_results_df = df_clustered_iter.copy()
                         
                 except Exception as e:
-                    # print(f"    Error during clustering: {e}") # Uncomment for debugging
+                    # print(f"    Error during clustering for LW:{lookback_window}, NC:{n_clusters}, Feat:{features_set} - {e}")
                     continue
     
     return best_params, best_results_df
-
-def generate_cluster_signals(df_input, n_clusters):
-    """
-    Generate trading signals based on cluster analysis (Vectorized)
-    """
-    df = df_input.copy()
-    
-    cluster_returns = df.groupby('cluster')['returns'].mean().fillna(0)
-    num_bullish_clusters = max(1, n_clusters // 2)
-    bullish_clusters = cluster_returns.nlargest(num_bullish_clusters).index if not cluster_returns.empty else pd.Index([])
-
-    df['prev_cluster'] = df['cluster'].shift(1)
-    df['current_is_bullish'] = df['cluster'].isin(bullish_clusters)
-    df['prev_is_bullish'] = df['prev_cluster'].isin(bullish_clusters)
-
-    buy_condition = df['current_is_bullish'] & ~df['prev_is_bullish']
-    sell_condition = ~df['current_is_bullish'] & df['prev_is_bullish']
-    
-    df['cluster_momentum_signal'] = np.nan
-    df.loc[buy_condition, 'cluster_momentum_signal'] = 1
-    df.loc[sell_condition, 'cluster_momentum_signal'] = 0
-    df['cluster_momentum_signal'] = df['cluster_momentum_signal'].ffill().fillna(0)
-    
-    df.drop(columns=['prev_cluster', 'current_is_bullish', 'prev_is_bullish'], inplace=True)
-    
-    df['cluster_persistence_signal'] = df['cluster'].isin(bullish_clusters).astype(int)
-    
-    cluster_volatility = df.groupby('cluster')['volatility'].mean().fillna(df['volatility'].mean())
-    num_low_vol_clusters = max(1, n_clusters // 2)
-    low_vol_clusters = cluster_volatility.nsmallest(num_low_vol_clusters).index if not cluster_volatility.empty else pd.Index([])
-        
-    df['cluster_vol_signal'] = 0
-    condition_low_vol_uptrend = df['cluster'].isin(low_vol_clusters) & (df['returns'].notna() & (df['returns'] > 0))
-    df.loc[condition_low_vol_uptrend, 'cluster_vol_signal'] = 1
-    
-    signal_cols = ['cluster_momentum_signal', 'cluster_persistence_signal', 'cluster_vol_signal']
-    df['Signal'] = (df[signal_cols].sum(axis=1) >= 2).astype(int)
-    
-    return df
 
 def log_best_params(file_path, timestamp, n_clusters, lookback_window, features, accuracy, 
                    processing_time, input_start_date, input_end_date, signal_method):
@@ -174,7 +104,7 @@ def log_best_params(file_path, timestamp, n_clusters, lookback_window, features,
         "timestamp": timestamp,
         "n_clusters": n_clusters,
         "lookback_window": lookback_window,
-        "features": str(features), # Convert list to string for CSV
+        "features": str(features), 
         "accuracy": accuracy,
         "processing_time": processing_time,
         "input_date": input_start_date,
@@ -182,7 +112,6 @@ def log_best_params(file_path, timestamp, n_clusters, lookback_window, features,
         "method": signal_method
     }])
     
-    # Ensure directory exists
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     
     if os.path.exists(file_path):
@@ -192,35 +121,48 @@ def log_best_params(file_path, timestamp, n_clusters, lookback_window, features,
 
 # Main execution
 if __name__ == "__main__":
-    data_path = 'data/BTCUSDT-trades-2025-05-20.csv'
+
+    # data_path = 'data/BTCUSDT-trades-latest-2days.csv' # New path for the downloaded data
+    # data_path = 'data/BTCUSDT-trades-previous-day.csv' # For testing with previous day data
+    # Or, if we decide to use resampled data:
+    data_path = 'data/BTCUSDT-trades-latest-2days-resampled-100ms.csv' 
+    # data_path = 'data/BTCUSDT-trades-previous-day-resampled-100ms.csv' 
     try:
-        # For large files, consider using nrows for testing:
-        # raw_data = pd.read_csv(data_path, nrows=50000) 
         raw_data = pd.read_csv(data_path)
+        # raw_data = pd.read_csv(data_path, nrows=50000) # For faster testing
     except FileNotFoundError:
         print(f"Warning: Data file '{data_path}' not found. Using dummy data for demonstration.")
-        dummy_dates = pd.to_datetime(pd.date_range(start='2023-01-01', periods=2000, freq='T')) # 'T' for minute
-        dummy_prices = 50000 + np.random.randn(2000).cumsum() * 10
-        raw_data = pd.DataFrame({'time': dummy_dates.astype(np.int64) // 10**6, 'price': dummy_prices}) # time in ms
+        dummy_dates = pd.to_datetime(pd.date_range(start='2023-01-01', periods=10000, freq='S')) # Use seconds for more data points
+        dummy_prices = 50000 + np.random.randn(10000).cumsum() * 2
+        raw_data = pd.DataFrame({'time': dummy_dates.astype(np.int64) // 10**6, 'price': dummy_prices})
 
     raw_data['time'] = pd.to_datetime(raw_data['time'], unit='ms')
     raw_data = raw_data.rename(columns={'price': 'last_trade_price'})
     raw_data.sort_values('time', inplace=True)
-    raw_data.reset_index(drop=True, inplace=True) # Crucial after sorting for consistent indexing
+    raw_data.reset_index(drop=True, inplace=True) 
     
+    # Reduce data size for faster tuning if using full dataset is too slow initially
+    # raw_data = raw_data.sample(n=min(len(raw_data), 100000), random_state=42).sort_values('time').reset_index(drop=True)
+
+
     train_size = int(0.8 * len(raw_data))
-    train_data = raw_data[:train_size].copy() # Use .copy() to avoid SettingWithCopyWarning
+    train_data = raw_data[:train_size].copy() 
     test_data = raw_data[train_size:].copy()
     
-    cluster_range = range(3, 8)
-    lookback_range = range(10, 31, 5)
+    if len(train_data) < 100: # Basic check for minimal data
+        print("Error: Not enough training data to proceed.")
+        exit()
+
+    cluster_range = range(3, 6)  # Reduced for faster example run: 3 to 5 clusters
+    lookback_range = range(15, 31, 10)  # Reduced for faster example run: 15, 25
+    
     feature_combinations = [
         ['returns', 'rsi', 'volatility', 'momentum'],
         ['returns', 'price_percentile', 'distance_from_ma', 'volatility'],
         ['rsi', 'momentum', 'price_range', 'distance_from_ma'],
         ['returns', 'rsi', 'momentum', 'price_percentile', 'volatility'],
         ['returns', 'volatility', 'price_range', 'distance_from_ma', 'momentum']
-    ]
+    ] # Reduced feature sets for faster example
     
     print("Starting clustering strategy optimization...")
     
@@ -242,72 +184,102 @@ if __name__ == "__main__":
         print("  No suitable parameters found during training.")
     print("="*50)
     
-    test_accuracy = 0.0
-    combined_results = train_results_df.copy()
+    # Model saving logic
+    MODEL_ARTIFACTS_DIR = "model_artifacts"
+    os.makedirs(MODEL_ARTIFACTS_DIR, exist_ok=True)
+    KMEANS_MODEL_PATH = os.path.join(MODEL_ARTIFACTS_DIR, "best_kmeans_model.joblib")
+    SCALER_PATH = os.path.join(MODEL_ARTIFACTS_DIR, "best_scaler.joblib")
+    CLUSTERING_CONFIG_PATH = os.path.join(MODEL_ARTIFACTS_DIR, "best_clustering_config.json")
+    
+    final_kmeans_model = None
+    final_scaler = None
 
     if best_params_train['n_clusters'] is not None:
-        test_df_with_features = create_technical_features(test_data, best_params_train['lookback_window'])
+        print("\nTraining final model on full training data with best parameters...")
+        full_train_df_for_final_model = TradingIndicators.create_technical_features(train_data.copy(), best_params_train['lookback_window'])
+        final_model_feature_cols = [col for col in best_params_train['features'] if col in full_train_df_for_final_model.columns]
+        
+        final_model_train_features_unscaled = full_train_df_for_final_model[final_model_feature_cols].dropna()
+
+        if not final_model_train_features_unscaled.empty and len(final_model_train_features_unscaled) >= best_params_train['n_clusters'] * 5:
+            final_scaler = StandardScaler()
+            final_train_features_scaled = final_scaler.fit_transform(final_model_train_features_unscaled)
+            
+            final_kmeans_model = KMeans(n_clusters=best_params_train['n_clusters'], init='k-means++', n_init=10, random_state=42)
+            final_kmeans_model.fit(final_train_features_scaled)
+
+            joblib.dump(final_scaler, SCALER_PATH)
+            joblib.dump(final_kmeans_model, KMEANS_MODEL_PATH)
+            
+            clustering_config_to_save = {
+                'lookback_window': best_params_train['lookback_window'],
+                'features': best_params_train['features'],
+                'n_clusters': int(best_params_train['n_clusters']) # Ensure native int
+            }
+            with open(CLUSTERING_CONFIG_PATH, 'w') as f:
+                json.dump(clustering_config_to_save, f, indent=4)
+            print(f"Saved final scaler to {SCALER_PATH}")
+            print(f"Saved final KMeans model to {KMEANS_MODEL_PATH}")
+            print(f"Saved final clustering config to {CLUSTERING_CONFIG_PATH}")
+        else:
+            print("Could not train and save final model: insufficient data or other issue.")
+    
+    # Test evaluation
+    test_accuracy = 0.0
+    combined_results = train_results_df.copy() if not train_results_df.empty else pd.DataFrame()
+
+    if final_kmeans_model and final_scaler and best_params_train['n_clusters'] is not None and not test_data.empty:
+        print("\nEvaluating final model on test data...")
+        test_df_with_features = TradingIndicators.create_technical_features(test_data.copy(), best_params_train['lookback_window'])
         best_feature_cols = [col for col in best_params_train['features'] if col in test_df_with_features.columns]
 
-        if not best_feature_cols or len(best_feature_cols) < 2:
-            print("Error: Best features not found or insufficient in test_df_with_features.")
-        else:
+        if best_feature_cols and len(best_feature_cols) >= 2:
             test_feature_data_unscaled = test_df_with_features[best_feature_cols].dropna()
-
-            if len(test_feature_data_unscaled) >= best_params_train['n_clusters'] * 5 : # Looser check for test data points
-                train_df_for_refit = create_technical_features(train_data, best_params_train['lookback_window'])
-                train_features_for_refit = train_df_for_refit[best_feature_cols].dropna()
-
-                if train_features_for_refit.empty:
-                    print("Error: No training data available for refitting scaler/KMeans with best params.")
-                else:
-                    scaler = StandardScaler()
-                    train_features_scaled_for_refit = scaler.fit_transform(train_features_for_refit)
-                    
-                    kmeans = KMeans(n_clusters=best_params_train['n_clusters'], init='k-means++', n_init=10, random_state=42)
-                    kmeans.fit(train_features_scaled_for_refit)
-                    
-                    test_features_scaled = scaler.transform(test_feature_data_unscaled)
-                    test_clusters = kmeans.predict(test_features_scaled)
-                    
-                    test_df_clustered = test_df_with_features.loc[test_feature_data_unscaled.index].copy()
-                    test_df_clustered['cluster'] = test_clusters
-                    test_df_clustered = generate_cluster_signals(test_df_clustered, best_params_train['n_clusters'])
-                    
-                    test_df_clustered['Market_Direction'] = np.where(
-                        test_df_clustered['last_trade_price'].shift(-1) > test_df_clustered['last_trade_price'], 1, 0
-                    )
-                    
-                    temp_accuracy_df_test = test_df_clustered[['Signal', 'Market_Direction']].dropna()
-                    test_accuracy = (temp_accuracy_df_test['Signal'] == temp_accuracy_df_test['Market_Direction']).mean() if not temp_accuracy_df_test.empty else 0.0
-                    print(f"Test signal accuracy: {test_accuracy:.2%}")
-
-                    # Prepare for combining results
-                    if 'Signal' in train_results_df.columns and 'Market_Direction' in train_results_df.columns:
-                         train_results_df['Correct'] = (train_results_df['Signal'] == train_results_df['Market_Direction'])
-                    
+            if len(test_feature_data_unscaled) >= best_params_train['n_clusters'] * 2: # Relaxed condition for test
+                test_features_scaled = final_scaler.transform(test_feature_data_unscaled)
+                test_clusters = final_kmeans_model.predict(test_features_scaled)
+                
+                test_df_clustered = test_df_with_features.loc[test_feature_data_unscaled.index].copy()
+                test_df_clustered['cluster'] = test_clusters
+                test_df_clustered = TradingIndicators.generate_cluster_signals(test_df_clustered, best_params_train['n_clusters'])
+                
+                test_df_clustered['Market_Direction'] = np.where(
+                    test_df_clustered['last_trade_price'].shift(-1) > test_df_clustered['last_trade_price'], 1, 0
+                )
+                
+                temp_accuracy_df_test = test_df_clustered[['Signal', 'Market_Direction']].dropna()
+                test_accuracy = (temp_accuracy_df_test['Signal'] == temp_accuracy_df_test['Market_Direction']).mean() if not temp_accuracy_df_test.empty else 0.0
+                print(f"Test signal accuracy (using final model): {test_accuracy:.2%}")
+                
+                # Combine results logic
+                if 'Signal' in train_results_df.columns and 'Market_Direction' in train_results_df.columns:
+                     if 'Correct' not in train_results_df.columns:
+                        train_results_df['Correct'] = (train_results_df['Signal'] == train_results_df['Market_Direction'])
+                
+                if 'Signal' in test_df_clustered.columns and 'Market_Direction' in test_df_clustered.columns:
                     test_df_clustered['Correct'] = (test_df_clustered['Signal'] == test_df_clustered['Market_Direction'])
-                    
-                    cols_to_combine = ['time', 'last_trade_price', 'cluster', 'returns', 'Correct', 'Signal', 'Market_Direction']
-                    train_cols = [col for col in cols_to_combine if col in train_results_df.columns]
-                    test_cols = [col for col in cols_to_combine if col in test_df_clustered.columns]
-                    common_cols_for_concat = list(set(train_cols) & set(test_cols))
+                
+                cols_to_combine = ['time', 'last_trade_price', 'cluster', 'returns', 'Correct', 'Signal', 'Market_Direction']
+                train_valid_cols = [col for col in cols_to_combine if col in train_results_df.columns]
+                test_valid_cols = [col for col in cols_to_combine if col in test_df_clustered.columns]
+                
+                common_cols = list(set(train_valid_cols) & set(test_valid_cols))
 
-                    if common_cols_for_concat:
-                        combined_results = pd.concat([
-                            train_results_df[common_cols_for_concat], 
-                            test_df_clustered[common_cols_for_concat]
-                        ], ignore_index=True)
-                        
-                        if 'Correct' in combined_results.columns:
-                            overall_accuracy = combined_results['Correct'].dropna().mean()
-                            print(f"Overall signal accuracy (Train+Test): {overall_accuracy:.2%}")
-                    else: # Fallback if no common columns (unlikely with this setup)
-                        combined_results = train_results_df # Or handle error
+                if common_cols:
+                    combined_results = pd.concat([
+                        train_results_df[common_cols] if not train_results_df.empty else pd.DataFrame(columns=common_cols),
+                        test_df_clustered[common_cols] if not test_df_clustered.empty else pd.DataFrame(columns=common_cols)
+                    ], ignore_index=True)
+                    
+                    if 'Correct' in combined_results.columns and not combined_results['Correct'].dropna().empty:
+                        overall_accuracy = combined_results['Correct'].dropna().mean()
+                        print(f"Overall signal accuracy (Train+Test): {overall_accuracy:.2%}")
             else:
-                print("Insufficient test data for clustering with best parameters.")
-    else:
-        print("No valid clustering model found from training. Skipping test phase.")
+                print("Insufficient test data after feature calculation for clustering evaluation.")
+        else:
+            print("Best features not found or insufficient in test_df_with_features for test evaluation.")
+    elif best_params_train['n_clusters'] is None:
+         print("No valid clustering model found from training. Skipping test phase.")
     
     end_time = time.time()
     processing_time = round(end_time - start_time, 2)
@@ -319,47 +291,45 @@ if __name__ == "__main__":
             n_clusters=best_params_train['n_clusters'],
             lookback_window=best_params_train['lookback_window'],
             features=best_params_train['features'],
-            accuracy=best_params_train['accuracy'], # Train accuracy
+            accuracy=best_params_train['accuracy'],
             processing_time=processing_time,
-            input_start_date=raw_data['time'].min().date(),
-            input_end_date=raw_data['time'].max().date(),
-            signal_method="Clustering_Optimized"
+            input_start_date=raw_data['time'].min().date() if not raw_data.empty else 'N/A',
+            input_end_date=raw_data['time'].max().date() if not raw_data.empty else 'N/A',
+            signal_method="Clustering_Optimized_V2"
         )
     
     print(f"Total processing time: {processing_time} seconds")
     
+    # Plotting (ensure combined_results is not empty and has necessary columns)
     if not combined_results.empty and 'cluster' in combined_results.columns and 'last_trade_price' in combined_results.columns:
-        # Sort combined results by time for chronological plotting
         if 'time' in combined_results.columns:
             combined_results = combined_results.sort_values('time').reset_index(drop=True)
-        else: # If no time column, use existing index (might be from concat)
+        else:
             combined_results = combined_results.reset_index(drop=True)
 
         plt.figure(figsize=(15, 10))
         
         plt.subplot(2, 2, 1)
-        scatter = plt.scatter(combined_results.index, combined_results['last_trade_price'], 
-                            c=combined_results['cluster'], cmap='viridis', alpha=0.6, s=1)
+        plt.scatter(combined_results.index, combined_results['last_trade_price'], 
+                    c=combined_results['cluster'], cmap='viridis', alpha=0.6, s=1)
         plt.title('Price Colored by Cluster (Combined Train+Test)')
-        plt.xlabel('Time Index (Combined)')
-        plt.ylabel('Price')
-        if combined_results['cluster'].nunique() > 1: plt.colorbar(scatter)
+        plt.xlabel('Time Index (Combined)'); plt.ylabel('Price')
+        if combined_results['cluster'].nunique() > 1: plt.colorbar(label='Cluster')
         
         if 'Correct' in combined_results.columns and not combined_results['Correct'].dropna().empty:
             plt.subplot(2, 2, 2)
-            rolling_window_size = min(500, max(10, len(combined_results['Correct'].dropna()) // 10)) # Dynamic window
+            rolling_window_size = min(500, max(50, len(combined_results['Correct'].dropna()) // 10))
             rolling_accuracy = combined_results['Correct'].dropna().rolling(window=rolling_window_size, min_periods=max(1, rolling_window_size//10)).mean()
             plt.plot(rolling_accuracy.index, rolling_accuracy, color='blue', alpha=0.7)
             plt.title(f'Rolling Signal Accuracy (window={rolling_window_size})')
             plt.ylabel('Accuracy'); plt.ylim(0, 1); plt.grid(True, alpha=0.3)
 
-        if 'cluster' in combined_results.columns:
-            plt.subplot(2, 2, 3)
-            cluster_counts = combined_results['cluster'].value_counts().sort_index()
-            plt.bar(cluster_counts.index, cluster_counts.values)
-            plt.title('Cluster Distribution (Combined)'); plt.xlabel('Cluster'); plt.ylabel('Count')
+        plt.subplot(2, 2, 3)
+        cluster_counts = combined_results['cluster'].value_counts().sort_index()
+        plt.bar(cluster_counts.index, cluster_counts.values)
+        plt.title('Cluster Distribution (Combined)'); plt.xlabel('Cluster'); plt.ylabel('Count')
         
-        if 'returns' in combined_results.columns and 'cluster' in combined_results.columns:
+        if 'returns' in combined_results.columns :
             plt.subplot(2, 2, 4)
             cluster_returns_plot = combined_results.groupby('cluster')['returns'].mean().fillna(0)
             if not cluster_returns_plot.empty:
@@ -371,4 +341,4 @@ if __name__ == "__main__":
         plt.tight_layout()
         plt.show()
     else:
-        print("Plotting skipped: No results to plot or essential columns missing.")
+        print("Plotting skipped: No results or essential columns missing.")
