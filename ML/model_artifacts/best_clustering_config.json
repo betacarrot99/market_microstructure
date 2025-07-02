@@ -1,0 +1,11 @@
+{
+    "lookback_window": 15,
+    "features": [
+        "returns",
+        "volatility",
+        "price_range",
+        "distance_from_ma",
+        "momentum"
+    ],
+    "n_clusters": 3
+}
