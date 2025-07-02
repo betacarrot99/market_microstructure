@@ -78,9 +78,14 @@ def main():
 
             strat_90_list.append(strat)
 
-    print(strat_95_list, "SELECTED FOR 95% SIGNIFICANCE LEVEL")
-    print(strat_90_list, "SELECTED FOR 90% SIGNIFICANCE LEVEL")
+    # print(strat_95_list, "SELECTED FOR 95% SIGNIFICANCE LEVEL")
+    # print(strat_90_list, "SELECTED FOR 90% SIGNIFICANCE LEVEL")
     allstratlist = strat_95_list + strat_90_list
+    if allstratlist == []:
+        print("all strategies are not significant on this date using this parameters, please rearrange the parameter windows, or we can proceed by selecting these signals first")
+        allstratlist = ['TSMOM','RSI','RSI_Momentum','BB','ATR','Stochastic']
+        print(allstratlist)
+
     new_df = pd.DataFrame({'signal': allstratlist})
     new_df.to_csv('result/selected_signal_after_wrc.csv', index=False)
     # print('this is the saved signal: ',new_df)

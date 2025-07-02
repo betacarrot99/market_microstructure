@@ -1,22 +1,26 @@
-# get_historical_data.py
+
 import os
 import zipfile
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 
-# Binance API config and file directory
+# Binance API config and file directories
 symbol = "BTCUSDT"
 base_url = f"https://data.binance.vision/data/futures/um/daily/trades/{symbol}"
 download_dir = "binance_trades_2days"
+data_dir = "data"
+result_dir = "result"
 os.makedirs(download_dir, exist_ok=True)
+os.makedirs(data_dir, exist_ok=True)
+os.makedirs(result_dir, exist_ok=True)
 
-# Output files naming & to set the resample interval
-output_file = "data/merged_BTCUSDT_trades.csv"
-resample_interval = "1min"  # Change to "10ms" or "0.1s" or "2min"
-resampled_file = f"data/BTCUSDT_{resample_interval}_resample.csv"
 
-# Download latest past 2 days trade data (at least 2 csv files)
+# Output files and intervals
+merged_file = os.path.join(data_dir, "merged_BTCUSDT_trades.csv")
+resample_intervals = ["1min", "1s"]  # added 1-second interval
+
+# Step 1: Download the last 2 days of trade data
 csv_files = []
 days_back = 1
 while len(csv_files) < 2:
@@ -30,58 +34,52 @@ while len(csv_files) < 2:
     if resp.status_code == 200:
         with open(zip_path, "wb") as f:
             f.write(resp.content)
-        print(f"Downloaded {zip_name}")
+        print(f"  → downloaded {zip_name}")
 
-        # Extract csv
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(download_dir)
-            extracted_files = zip_ref.namelist()
-            csv_file_path = os.path.join(download_dir, extracted_files[0])
-            csv_files.append(csv_file_path)
+        # extract the single CSV inside
+        with zipfile.ZipFile(zip_path, 'r') as z:
+            inner_name = z.namelist()[0]
+            z.extract(inner_name, download_dir)
+            csv_files.append(os.path.join(download_dir, inner_name))
     else:
-        print(f" {date_str} not available (HTTP {resp.status_code})")
+        print(f"  → {date_str} not available (HTTP {resp.status_code})")
 
     days_back += 1
-
-# Data cleaning
-df_list = []
-for f in csv_files:
-    df = pd.read_csv(f, low_memory=False)
-    df_list.append(df)
-
-# Merge and sort
+# csv_files = ['binance_trades_2days/BTCUSDT-trades-2025-06-21.csv','binance_trades_2days/BTCUSDT-trades-2025-06-22.csv']
+# Step 2: Merge & save raw trades
+df_list = [pd.read_csv(f, low_memory=False) for f in csv_files]
 merged_df = pd.concat(df_list, ignore_index=True)
 merged_df.sort_values("time", inplace=True)
-merged_df.to_csv(output_file, index=False)
-print(f"\nMerged CSV saved to: {output_file}")
+merged_df.to_csv(merged_file, index=False)
+print(f"\nMerged CSV saved to: {merged_file}")
 
-# Resample
-merged_df["time"] = pd.to_datetime(merged_df["time"], unit='ms')
-df_resampled = merged_df.set_index("time").resample(resample_interval).agg({
-    "id" : "last",
-    "price": ["last", "max", "min"],
-    "qty": "sum",
-    # "quote_qty": "sum",
-    # "is_buyer_maker": "last"
-}).dropna().reset_index()
+# Step 3: Convert timestamp & set index
+merged_df["time"] = pd.to_datetime(merged_df["time"], unit="ms")
+merged_df.set_index("time", inplace=True)
 
-# df_resampled["time"] = (df_resampled["time"].astype("int64") // 1_000_000).astype("int64")
+# Step 4: Resample for each interval and save
+for interval in resample_intervals:
+    df_r = merged_df.resample(interval).agg({
+        "id": "last",
+        "price": ["last", "max", "min"],
+        "qty": "sum",
+    }).dropna().reset_index()
 
-# Flatten multi-level columns after aggregation
-df_resampled.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in df_resampled.columns]
-df_resampled = df_resampled.reset_index()
+    # flatten MultiIndex columns, dropping the trailing underscore when level2 is empty
+    df_r.columns = [
+        f"{lvl0}_{lvl1}" if lvl1 else lvl0
+        for lvl0, lvl1 in df_r.columns
+    ]
 
-# Rename price column
-df_resampled.rename(columns={
-    "time_": "time",
-    "id_last": "trade_id",
-    "price_last": "price",
-    "price_max": "high",
-    "price_min": "low",
-    "qty_sum": "qty",
-    # "quote_qty_sum": "quote_qty",
-    # "is_buyer_maker_last": "is_buyer_maker"
-}, inplace=True)
+    # rename to cleaner names
+    df_r.rename(columns={
+        "id_last":    "trade_id",
+        "price_last": "price",
+        "price_max":  "high",
+        "price_min":  "low",
+        "qty_sum":    "qty",
+    }, inplace=True)
 
-df_resampled.to_csv(resampled_file, index=False)
-print(f"Resampled CSV saved to: {resampled_file}")
+    out_path = os.path.join(data_dir, f"BTCUSDT_{interval}_resample.csv")
+    df_r.to_csv(out_path, index=False)
+    print(f"Resampled ({interval}) CSV saved to: {out_path}")
