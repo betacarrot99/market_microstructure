@@ -5,3 +5,6 @@ timestamp,n_clusters,lookback_window,features,accuracy,processing_time,input_dat
 2025-06-06 16:48:00,3,15,"['returns', 'price_percentile', 'distance_from_ma', 'volatility']",0.6301826731777899,15.46,2025-06-04,2025-06-05,Clustering_Optimized_V2
 2025-06-06 16:56:20,3,15,"['returns', 'price_percentile', 'distance_from_ma', 'volatility']",0.8675208914455028,44.99,2025-06-04,2025-06-05,Clustering_Optimized_V2
 2025-06-06 21:20:53,3,15,"['returns', 'price_percentile', 'distance_from_ma', 'volatility']",0.7817347868773278,711.02,2025-06-05,2025-06-05,Clustering_Optimized_V2
+2025-06-26 22:41:41,3,25,"['returns', 'price_percentile', 'distance_from_ma', 'volatility']",0.7539669185995287,216.03,2025-06-24,2025-06-25,Clustering_Optimized_V2
+2025-06-27 20:47:54,3,15,"['rsi', 'momentum', 'price_range', 'distance_from_ma']",0.6801568764416116,32.62,2025-06-25,2025-06-26,Clustering_Optimized_V2
+2025-06-27 20:52:25,3,15,"['returns', 'volatility', 'price_range', 'distance_from_ma', 'momentum']",0.8510230419547031,122.42,2025-06-25,2025-06-26,Clustering_Optimized_V2

@@ -2,9 +2,10 @@
     "lookback_window": 15,
     "features": [
         "returns",
-        "price_percentile",
+        "volatility",
+        "price_range",
         "distance_from_ma",
-        "volatility"
+        "momentum"
     ],
     "n_clusters": 3
 }

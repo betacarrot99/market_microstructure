@@ -123,10 +123,11 @@ def log_best_params(file_path, timestamp, n_clusters, lookback_window, features,
 if __name__ == "__main__":
 
     # data_path = 'data/BTCUSDT-trades-latest-2days.csv' # New path for the downloaded data
-    data_path = 'data/BTCUSDT-trades-previous-day.csv' # For testing with previous day data
+    # data_path = 'data/BTCUSDT-trades-previous-day.csv' # For testing with previous day data
     # Or, if we decide to use resampled data:
-    # data_path = 'data/BTCUSDT-trades-latest-2days-resampled-100ms.csv' 
-    # data_path = 'data/BTCUSDT-trades-previous-day-resampled-100ms.csv' 
+    # data_path = 'data/BTCUSDT-trades-latest-2days-resampled-1s.csv' 
+    # data_path = 'data/ETHUSDT-trades-latest-2days-resampled-1s.csv' 
+    data_path = 'data/BTCUSDT-trades-latest-2days-resampled-100ms.csv'
     try:
         raw_data = pd.read_csv(data_path)
         # raw_data = pd.read_csv(data_path, nrows=50000) # For faster testing
@@ -153,7 +154,7 @@ if __name__ == "__main__":
         print("Error: Not enough training data to proceed.")
         exit()
 
-    cluster_range = range(3, 6)  # Reduced for faster example run: 3 to 5 clusters
+    cluster_range = range(3, 6)         # Reduced for faster example run: 3 to 5 clusters
     lookback_range = range(15, 31, 10)  # Reduced for faster example run: 15, 25
     
     feature_combinations = [

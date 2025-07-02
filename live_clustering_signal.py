@@ -19,9 +19,9 @@ TRADE_URL = 'https://fapi.binance.com/fapi/v1/trades'
 SYMBOL = "BTCUSDT"
 # INTERVAL: How often to generate a new prediction.
 # Needs to be > average time to fetch data + compute features + predict.
-INTERVAL = 2      # Prediction interval in seconds (adjust based on computation time)
+INTERVAL = 1      # Prediction interval in seconds (adjust based on computation time)
 # HORIZON: How far into the future the prediction is for.
-HORIZON = 10       # Evaluation horizon in seconds (e.g., predict price change in next 10s)
+HORIZON = 20       # Evaluation horizon in seconds (e.g., predict price change in next 10s)
 # MAXLEN: Size of the data buffer for features. Should be > largest lookback_window from config.
 MAXLEN = 500      # Data buffer size.
 CSV_FILE = "live_clustering_predictions_v2.csv"
